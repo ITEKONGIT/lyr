@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IYR Watcher</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #0f0; margin: 20px; }
+        #log { height: 80vh; overflow-y: scroll; padding: 10px; border: 1px solid #0f0; font-size: 14px; }
+        .known { color: #0f0; } .unknown { color: #ff0; } .spoof { color: #f00; }
+        h1 { font-size: 18px; }
+    </style>
+</head>
+<body>
+    <h1>IYR Live Identification Feed</h1>
+    <div id="status" style="margin-bottom:10px;">Connecting...</div>
+    <pre id="log"></pre>
+    <script>
+        const log = document.getElementById('log');
+        const status = document.getElementById('status');
+        const ws = new WebSocket('ws://localhost:8000/api/v1/stream/detections');
+        
+        ws.onopen = () => status.textContent = 'Connected — 10 FPS';
+        ws.onclose = () => status.textContent = 'Disconnected';
+        
+        ws.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            const time = new Date().toLocaleTimeString();
+            
+            if (data.detections.length === 0) {
+                log.innerHTML += `<div>${time} | No face in frame</div>`;
+            } else {
+                data.detections.forEach(d => {
+                    let cls = d.is_known ? 'known' : (d.is_live ? 'unknown' : 'spoof');
+                    log.innerHTML += `<div class="${cls}">${time} | ${d.identity} | ${(d.confidence*100).toFixed(1)}% | live: ${d.is_live}</div>`;
+                });
+            }
+            log.scrollTop = log.scrollHeight;
+        };
+    </script>
+</body>
+</html>
