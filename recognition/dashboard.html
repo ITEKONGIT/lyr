@@ -16,10 +16,16 @@
     <script>
         const log = document.getElementById('log');
         const status = document.getElementById('status');
-        const ws = new WebSocket('ws://localhost:8000/api/v1/stream/detections');
+        const apiKey = prompt('Enter your API key for IYR Watcher:', '');
+if (!apiKey) {
+    document.getElementById('status').textContent = 'API key required. Reload to try again.';
+    throw new Error('API key required');
+}
+
+const ws = new WebSocket(`ws://localhost:8000/api/v1/stream/detections?api_key=${encodeURIComponent(apiKey)}`);
         
         ws.onopen = () => status.textContent = 'Connected — 10 FPS';
-        ws.onclose = () => status.textContent = 'Disconnected';
+ws.onclose = () => status.textContent = 'Disconnected — refresh to reconnect';
         
         ws.onmessage = (e) => {
             const data = JSON.parse(e.data);

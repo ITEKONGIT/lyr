@@ -19,7 +19,7 @@ from typing import Optional, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from .dependencies import (
@@ -28,7 +28,18 @@ from .dependencies import (
     is_controller_running,
 )
 
-router = APIRouter(prefix="/api/v1", tags=["Face Recognition"])
+from .dependencies import (
+    get_controller,
+    get_broadcaster,
+    is_controller_running,
+    verify_api_key,  # ADD THIS
+)
+
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["Face Recognition"],
+    dependencies=[Depends(verify_api_key)]  # ADD THIS — protects ALL routes
+)
 
 
 # ──────────────────────────────────────────────────
@@ -287,10 +298,22 @@ async def identify_once():
 async def stream_detections(websocket: WebSocket):
     """
     Real-time identification stream at ~10 FPS.
-
-    """
-    broadcaster = get_broadcaster()
     
+    Requires API key as query parameter: ?api_key=your_key
+    """
+    # Check API key for WebSocket connection
+    from .dependencies import verify_websocket_key
+    
+    if not await verify_websocket_key(websocket):
+        await websocket.accept()
+        await websocket.send_json({
+            "error": "Invalid or missing API key. Provide ?api_key= in the URL."
+        })
+        await websocket.close(code=1008, reason="Invalid API key")
+        return
+    
+    broadcaster = get_broadcaster()
+
     if broadcaster is None:
         await websocket.accept()
         await websocket.send_json({
@@ -298,9 +321,9 @@ async def stream_detections(websocket: WebSocket):
         })
         await websocket.close()
         return
-    
+
     await broadcaster.connect(websocket)
-    
+
     try:
         while True:
             await websocket.receive_text()
@@ -310,7 +333,6 @@ async def stream_detections(websocket: WebSocket):
         pass
     finally:
         await broadcaster.disconnect(websocket)
-
 
 # ──────────────────────────────────────────────────
 # IDENTITY MANAGEMENT ENDPOINTS
