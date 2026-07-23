@@ -15,7 +15,7 @@ Endpoints:
 import sys
 import os
 from datetime import datetime, timezone
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -35,10 +35,23 @@ from .dependencies import (
     verify_api_key,  # ADD THIS
 )
 
+from recognition.sensor_contracts import (
+    MAX_BATCH_READINGS,
+    SensorReading,
+    SensorType,
+    SensorUnit,
+)
+from recognition.sensor_history import (
+    HistoryBackpressureError,
+    MAX_QUERY_LIMIT,
+    QueryFilter,
+    get_store,
+)
+from recognition.sensor_registry import get_registry
+
 router = APIRouter(
     prefix="/api/v1",
     tags=["Face Recognition"],
-    dependencies=[Depends(verify_api_key)]  # ADD THIS — protects ALL routes
 )
 
 
@@ -142,6 +155,33 @@ class LivenessDebugResponse(BaseModel):
     samples_seen: int
 
 
+class SensorReadingPayload(BaseModel):
+    sensor_id: str = Field(..., min_length=1)
+    sensor_type: str = Field(...)
+    value: float
+    timestamp: Optional[datetime] = None
+    unit: Optional[str] = None
+    confidence_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source: Optional[str] = None
+    device_info: Optional[Dict[str, Any]] = None
+    raw_data: Optional[Dict[str, Any]] = None
+    location: Optional[Dict[str, float]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    reading_id: Optional[str] = None
+    face_data: Optional[Dict[str, Any]] = None
+
+
+class SensorBatchPayload(BaseModel):
+    readings: List[Dict[str, Any]] = Field(..., min_length=1)
+    source_node: Optional[str] = None
+
+
+class SensorQueryPayload(BaseModel):
+    filters: List[Dict[str, Any]] = Field(default_factory=list)
+    limit: int = Field(default=100, ge=1, le=MAX_QUERY_LIMIT)
+    order: str = Field(default="desc")
+
+
 # ──────────────────────────────────────────────────
 # HELPERS
 # ──────────────────────────────────────────────────
@@ -196,11 +236,200 @@ def _build_register_response(result) -> RegisterResponse:
 
 
 # ──────────────────────────────────────────────────
+# SENSOR INGESTION ENDPOINTS
+# ──────────────────────────────────────────────────
+
+@router.post("/sensors/ingest", status_code=201)
+async def ingest_sensor_reading(
+    payload: SensorReadingPayload,
+    api_key: str = Depends(verify_api_key),
+):
+    """Ingest one generic sensor reading."""
+    reading = _payload_to_sensor_reading(payload)
+    _record_sensor_reading(reading)
+    return {
+        "status": "accepted",
+        "reading": _public_sensor_reading(reading),
+    }
+
+
+@router.post("/sensors/ingest/batch")
+async def ingest_sensor_batch(
+    payload: SensorBatchPayload,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Ingest a batch with partial-success semantics.
+
+    Each item gets its own accepted/rejected status so one malformed reading
+    does not discard legitimate readings from the same sensor burst.
+    """
+    if len(payload.readings) > MAX_BATCH_READINGS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Batch too large: {len(payload.readings)} > {MAX_BATCH_READINGS}",
+        )
+
+    results = []
+    accepted = 0
+    failed = 0
+    for index, item in enumerate(payload.readings):
+        try:
+            reading_payload = SensorReadingPayload.model_validate(item)
+            reading = _payload_to_sensor_reading(reading_payload)
+            _record_sensor_reading(reading)
+            accepted += 1
+            results.append({
+                "index": index,
+                "status": "accepted",
+                "reading_id": reading.reading_id,
+            })
+        except HTTPException as exc:
+            failed += 1
+            results.append({
+                "index": index,
+                "status": "rejected",
+                "error": exc.detail,
+            })
+        except Exception as exc:
+            failed += 1
+            results.append({
+                "index": index,
+                "status": "rejected",
+                "error": str(exc),
+            })
+
+    if accepted and failed:
+        status_text = "partial_success"
+    elif accepted:
+        status_text = "success"
+    else:
+        status_text = "failed"
+
+    return {
+        "status": status_text,
+        "accepted": accepted,
+        "failed": failed,
+        "results": results,
+    }
+
+
+@router.websocket("/sensors/ingest/ws/{sensor_id}")
+async def ingest_sensor_stream(websocket: WebSocket, sensor_id: str):
+    """Ingest sensor readings over WebSocket with explicit ack/nack replies."""
+    from .dependencies import verify_websocket_key
+
+    if not await verify_websocket_key(websocket):
+        await websocket.accept()
+        await websocket.send_json({
+            "status": "rejected",
+            "error": "Invalid or missing API key. Provide ?api_key= in the URL.",
+        })
+        await websocket.close(code=1008, reason="Invalid API key")
+        return
+
+    await websocket.accept()
+    while True:
+        try:
+            message = await websocket.receive_json()
+            if "sensor_id" in message and message["sensor_id"] != sensor_id:
+                await websocket.send_json({
+                    "status": "rejected",
+                    "error": "sensor_id in message does not match WebSocket path",
+                })
+                continue
+
+            message["sensor_id"] = sensor_id
+            reading_payload = SensorReadingPayload.model_validate(message)
+            reading = _payload_to_sensor_reading(reading_payload)
+            _record_sensor_reading(reading)
+            await websocket.send_json({
+                "status": "accepted",
+                "reading_id": reading.reading_id,
+            })
+        except WebSocketDisconnect:
+            break
+        except HTTPException as exc:
+            await websocket.send_json({
+                "status": "rejected",
+                "error": exc.detail,
+            })
+        except Exception as exc:
+            await websocket.send_json({
+                "status": "rejected",
+                "error": str(exc),
+            })
+
+
+@router.get("/sensors/status/{sensor_id}")
+async def get_sensor_status(
+    sensor_id: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """Return registry metadata for a known sensor."""
+    sensor = get_registry().get_sensor(sensor_id)
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    return sensor.to_dict()
+
+
+@router.get("/sensors/history/{sensor_id}")
+async def get_sensor_history(
+    sensor_id: str,
+    limit: int = 100,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """Return recent readings for a known sensor."""
+    if get_registry().get_sensor(sensor_id) is None:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    try:
+        readings = get_store().get_history(
+            sensor_id=sensor_id,
+            limit=limit,
+            since=since,
+            until=until,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "sensor_id": sensor_id,
+        "count": len(readings),
+        "readings": [_public_sensor_reading(reading) for reading in readings],
+    }
+
+
+@router.post("/sensors/query")
+async def query_sensor_history(
+    payload: SensorQueryPayload,
+    api_key: str = Depends(verify_api_key),
+):
+    """Structured generic sensor-history query."""
+    filters = _build_query_filters(payload.filters)
+    try:
+        readings = get_store().query(
+            filters=filters,
+            limit=payload.limit,
+            order=payload.order,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "count": len(readings),
+        "readings": [_public_sensor_reading(reading) for reading in readings],
+    }
+
+
+# ──────────────────────────────────────────────────
 # REGISTRATION ENDPOINTS
 # ──────────────────────────────────────────────────
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-async def register_face(payload: RegisterRequest):
+async def register_face(
+    payload: RegisterRequest,
+    api_key: str = Depends(verify_api_key),
+):
     """
     Register a face synchronously with quality assessment.
     
@@ -232,7 +461,10 @@ async def register_face(payload: RegisterRequest):
 
 
 @router.put("/identities/{user_id}/re-enroll", response_model=RegisterResponse)
-async def re_enroll_face(user_id: str):
+async def re_enroll_face(
+    user_id: str,
+    api_key: str = Depends(verify_api_key),
+):
     """
     Update an existing identity with fresh face data.
 
@@ -257,7 +489,7 @@ async def re_enroll_face(user_id: str):
 # ──────────────────────────────────────────────────
 
 @router.post("/identify", response_model=IdentifyResponse)
-async def identify_once():
+async def identify_once(api_key: str = Depends(verify_api_key)):
     """
     One-shot identification — capture a single frame and identify
     the largest face in it.
@@ -339,7 +571,7 @@ async def stream_detections(websocket: WebSocket):
 # ──────────────────────────────────────────────────
 
 @router.get("/identities", response_model=IdentityListResponse)
-async def list_identities():
+async def list_identities(api_key: str = Depends(verify_api_key)):
     """List all enrolled identities (without embedding vectors)."""
     controller = _require_controller()
     
@@ -352,7 +584,10 @@ async def list_identities():
 
 
 @router.delete("/identities/{doc_id}")
-async def delete_identity(doc_id: str):
+async def delete_identity(
+    doc_id: str,
+    api_key: str = Depends(verify_api_key),
+):
     """Delete an enrolled identity by document ID."""
     controller = _require_controller()
     
@@ -369,7 +604,7 @@ async def delete_identity(doc_id: str):
 # ──────────────────────────────────────────────────
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check():
+async def health_check(api_key: str = Depends(verify_api_key)):
     """System health and throughput statistics."""
     controller = _require_controller()
     stats = controller.get_stats()
@@ -389,7 +624,7 @@ async def health_check():
 
 
 @router.get("/debug/liveness", response_model=LivenessDebugResponse)
-async def debug_liveness():
+async def debug_liveness(api_key: str = Depends(verify_api_key)):
     """
     Live liveness variance monitor for threshold calibration.
     
@@ -425,3 +660,64 @@ async def debug_liveness():
         running_mean=stats["running_mean_variance"],
         samples_seen=stats["samples_seen"],
     )
+
+
+PROTECTED_FACE_METADATA_KEYS = {"identity", "name", "user_id"}
+
+
+def _payload_to_sensor_reading(payload: SensorReadingPayload) -> SensorReading:
+    data = payload.model_dump(exclude_none=True)
+    try:
+        if "sensor_type" in data:
+            data["sensor_type"] = SensorType.from_string(data["sensor_type"])
+        if "unit" in data:
+            data["unit"] = SensorUnit.from_string(data["unit"])
+        return SensorReading(**data)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _record_sensor_reading(reading: SensorReading) -> None:
+    try:
+        get_registry().record_reading(reading)
+        get_store().record(reading)
+    except HistoryBackpressureError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _public_sensor_reading(reading: SensorReading) -> Dict[str, Any]:
+    result = reading.to_dict()
+    if reading.sensor_type == SensorType.FACE and "metadata" in result:
+        result["metadata"] = {
+            key: value
+            for key, value in result["metadata"].items()
+            if key not in PROTECTED_FACE_METADATA_KEYS
+        }
+        result["metadata_redacted"] = True
+    return result
+
+
+def _build_query_filters(filters: List[Dict[str, Any]]) -> List[QueryFilter]:
+    built = []
+    for item in filters:
+        try:
+            query_filter = QueryFilter(
+                field=item["field"],
+                op=item["op"],
+                value=item["value"],
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Missing query filter field: {exc.args[0]}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if query_filter.op == "LIKE":
+            raise HTTPException(
+                status_code=403,
+                detail="LIKE queries require elevated sensor-query privileges.",
+            )
+        built.append(query_filter)
+    return built

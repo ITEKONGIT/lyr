@@ -20,6 +20,7 @@ TEST_GROUPS = {
     "unit": ["tests/unit"],
     "integration": ["tests/integration"],
     "sensor": [
+        "tests/unit/test_sensor_api.py",
         "tests/unit/test_sensor_contracts.py",
         "tests/unit/test_registry.py",
         "tests/unit/test_sensor_history.py",

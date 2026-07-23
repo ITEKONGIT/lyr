@@ -8,18 +8,22 @@ Provides:
 """
 
 import sys
+import hmac
 import os
 import threading
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from fastapi import HTTPException, WebSocket, status, Depends
 from fastapi.security import APIKeyHeader
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from controller import FaceRegController
 from config import Config
 
-_controller: Optional[FaceRegController] = None
+if TYPE_CHECKING:
+    from controller import FaceRegController
+
+
+_controller: Optional["FaceRegController"] = None
 _lock = threading.Lock()
 
 # ──────────────────────────────────────────────────
@@ -56,7 +60,7 @@ def verify_api_key(api_key: Optional[str] = Depends(api_key_header)) -> str:
         )
     
     # Use constant-time comparison to prevent timing attacks
-    if not api_key == Config.API_KEY:
+    if not hmac.compare_digest(api_key, Config.API_KEY):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key.",
@@ -91,7 +95,7 @@ async def verify_websocket_key(websocket: WebSocket) -> bool:
 # CONTROLLER MANAGEMENT
 # ──────────────────────────────────────────────────
 
-def get_controller() -> Optional[FaceRegController]:
+def get_controller() -> Optional["FaceRegController"]:
     """
     Returns the singleton controller instance.
     """
@@ -124,6 +128,8 @@ def start_controller() -> bool:
             return True
 
         print("[Dependencies] Starting controller...")
+        from controller import FaceRegController
+
         _controller = FaceRegController()
 
         if not _controller.start():

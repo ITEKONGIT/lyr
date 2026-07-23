@@ -86,6 +86,8 @@ def create_app() -> "FastAPI":
     # Import the auth dependency (only needed locally, for the two routes below)
     from .dependencies import verify_api_key
 
+    MAX_REQUEST_BODY_BYTES = 1_000_000
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # ── Startup ──
@@ -144,6 +146,27 @@ def create_app() -> "FastAPI":
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def enforce_body_size_limit(request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                size = int(content_length)
+            except ValueError:
+                size = 0
+            if size > MAX_REQUEST_BODY_BYTES:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": (
+                            f"Request body too large. Limit is "
+                            f"{MAX_REQUEST_BODY_BYTES} bytes."
+                        )
+                    },
+                )
+        return await call_next(request)
 
     # Register routes
     app.include_router(router)
