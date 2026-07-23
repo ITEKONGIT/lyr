@@ -5,6 +5,7 @@ Examples:
     python tests/run_tests.py --unit
     python tests/run_tests.py --integration
     python tests/run_tests.py --sensor
+    python tests/run_tests.py --threshold
     python tests/run_tests.py --all
 """
 
@@ -25,6 +26,14 @@ TEST_GROUPS = {
         "tests/unit/test_registry.py",
         "tests/unit/test_sensor_history.py",
     ],
+    "threshold": [
+        "tests/unit/test_breach_log.py",
+        "tests/unit/test_ollama_advisory.py",
+        "tests/unit/test_threshold_contracts.py",
+        "tests/unit/test_threshold_gate.py",
+        "tests/unit/test_threshold_rules.py",
+        "tests/unit/test_threshold_state.py",
+    ],
 }
 
 
@@ -41,6 +50,8 @@ def _build_args(args: argparse.Namespace) -> list[str]:
             selected.extend(TEST_GROUPS["integration"])
         if args.sensor:
             selected.extend(TEST_GROUPS["sensor"])
+        if args.threshold:
+            selected.extend(TEST_GROUPS["threshold"])
 
     if not selected:
         selected.extend(TEST_GROUPS["sensor"])
@@ -67,6 +78,7 @@ def main() -> int:
     parser.add_argument("--unit", action="store_true", help="Run all unit tests.")
     parser.add_argument("--integration", action="store_true", help="Run integration tests.")
     parser.add_argument("--sensor", action="store_true", help="Run sensor registry/history tests.")
+    parser.add_argument("--threshold", action="store_true", help="Run Tier 2 threshold tests.")
     parser.add_argument("-q", "--quiet", action="store_true", help="Pass -q to pytest.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Pass -v to pytest.")
     parser.add_argument("extra", nargs="*", help="Extra arguments passed through to pytest.")

@@ -1,0 +1,23 @@
+{
+  "rules": [
+    {
+      "rule_id": "temperature_high_warning",
+      "name": "Temperature high warning",
+      "description": "Log sustained indoor temperature above normal comfort range.",
+      "sensor_type": "temperature",
+      "enter_threshold": 36.0,
+      "clear_threshold": 34.0,
+      "severity": "warning",
+      "mode": "log_only",
+      "sustained_for_seconds": 10.0,
+      "clear_delay_seconds": 3.0,
+      "staleness_policy": "alert_stale",
+      "stale_age_seconds": 60,
+      "enabled": true,
+      "metadata": {
+        "phase": "2.2",
+        "owner": "threshold_gate"
+      }
+    }
+  ]
+}
