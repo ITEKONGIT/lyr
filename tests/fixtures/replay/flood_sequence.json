@@ -1,0 +1,26 @@
+{
+  "rule_id": "flash_flood_multi_evidence",
+  "expected": {
+    "status": "active",
+    "policy_action": "continue",
+    "min_confidence": 0.9
+  },
+  "readings": [
+    {
+      "sensor_id": "rainfall_1",
+      "sensor_type": "rainfall",
+      "value": 35.0
+    },
+    {
+      "sensor_id": "soil_moisture_1",
+      "sensor_type": "soil_moisture",
+      "value": 0.9
+    },
+    {
+      "sensor_id": "water_1",
+      "sensor_type": "water_level",
+      "value": 1.8,
+      "trigger": true
+    }
+  ]
+}

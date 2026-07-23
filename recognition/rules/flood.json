@@ -1,0 +1,51 @@
+{
+  "rules": [
+    {
+      "rule_id": "flash_flood_multi_evidence",
+      "name": "Flash flood multi-evidence detection",
+      "description": "Detect flood risk from rising water level corroborated by recent rainfall and optional soil saturation.",
+      "sensor_type": "water_level",
+      "enter_threshold": 1.5,
+      "clear_threshold": 1.0,
+      "severity": "high",
+      "mode": "escalate",
+      "sustained_for_seconds": 0.0,
+      "clear_delay_seconds": 0.0,
+      "staleness_policy": "alert_stale",
+      "stale_age_seconds": 600,
+      "conditions": [
+        {
+          "sensor_id": "rainfall_1",
+          "sensor_type": "rainfall",
+          "operator": ">=",
+          "threshold": 30.0,
+          "history_window_seconds": 600,
+          "required": true,
+          "role": "corroborates",
+          "weight": 0.25,
+          "reason": "Recent rainfall corroborates flood risk"
+        },
+        {
+          "sensor_id": "soil_moisture_1",
+          "sensor_type": "soil_moisture",
+          "operator": ">",
+          "threshold": 0.8,
+          "history_window_seconds": 600,
+          "required": false,
+          "role": "corroborates",
+          "weight": 0.1,
+          "reason": "Soil saturation strengthens flood risk"
+        }
+      ],
+      "metadata": {
+        "phase": "2.7.6",
+        "base_confidence": 0.55,
+        "primary_weight": 0.2,
+        "max_confidence": 0.95,
+        "missing_required_penalty": 0.15,
+        "stale_required_penalty": 0.2
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "rule_id": "flash_flood_multi_evidence",
+  "expected": {
+    "status": "active",
+    "policy_action": "stale_alert",
+    "mode": "log_only",
+    "severity": "warning"
+  },
+  "readings": [
+    {
+      "sensor_id": "water_1",
+      "sensor_type": "water_level",
+      "value": 1.8,
+      "trigger": true
+    }
+  ]
+}

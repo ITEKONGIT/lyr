@@ -16,6 +16,10 @@ from .sensor_contracts import SensorType
 
 DEFAULT_CROSS_SENSOR_HISTORY_SECONDS = 60
 DEFAULT_CLUSTER_WINDOW_MS = 500
+DEFAULT_BASE_CONFIDENCE = 0.50
+DEFAULT_MAX_CONFIDENCE = 0.95
+DEFAULT_MISSING_REQUIRED_PENALTY = 0.15
+DEFAULT_STALE_REQUIRED_PENALTY = 0.15
 
 
 def _utc_now_naive() -> datetime:
@@ -65,6 +69,12 @@ class ContextEffect(str, Enum):
     ESCALATE = "escalate"
 
 
+class EvidenceRole(str, Enum):
+    CORROBORATES = "corroborates"
+    CONTRADICTS = "contradicts"
+    CONTEXT = "context"
+
+
 @dataclass
 class RuleCondition:
     """
@@ -78,6 +88,8 @@ class RuleCondition:
     history_window_seconds: int = DEFAULT_CROSS_SENSOR_HISTORY_SECONDS
     required: bool = True
     effect: ContextEffect = ContextEffect.NEUTRAL
+    role: EvidenceRole = EvidenceRole.CORROBORATES
+    weight: float = 0.0
     reason: str = ""
 
     def __post_init__(self) -> None:
@@ -95,6 +107,13 @@ class RuleCondition:
                 self.effect = ContextEffect(self.effect)
             except ValueError as exc:
                 raise ValueError(f"Unsupported context effect: {self.effect}") from exc
+        if isinstance(self.role, str):
+            try:
+                self.role = EvidenceRole(self.role)
+            except ValueError as exc:
+                raise ValueError(f"Unsupported evidence role: {self.role}") from exc
+        if not (0.0 <= self.weight <= 1.0):
+            raise ValueError("condition weight must be between 0.0 and 1.0")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -105,6 +124,8 @@ class RuleCondition:
             "history_window_seconds": self.history_window_seconds,
             "required": self.required,
             "effect": self.effect.value,
+            "role": self.role.value,
+            "weight": self.weight,
             "reason": self.reason,
         }
 
@@ -169,12 +190,15 @@ class Rule:
             raise ValueError("clear_delay_seconds cannot be negative")
         if self.stale_age_seconds < 1:
             raise ValueError("stale_age_seconds must be at least 1")
+        _validate_confidence_metadata(self.metadata)
 
         primary_condition = RuleCondition(
             sensor_type=self.sensor_type,
             operator=ComparisonOperator.GT,
             threshold=self.enter_threshold,
             required=True,
+            role=EvidenceRole.CORROBORATES,
+            weight=float(self.metadata.get("primary_weight", 0.0)),
         )
         self.conditions = [primary_condition, *self.conditions]
 
@@ -303,15 +327,43 @@ def _dt_to_str(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
 
 
+def _validate_confidence_metadata(metadata: Dict[str, Any]) -> None:
+    settings = {
+        "base_confidence": metadata.get("base_confidence", DEFAULT_BASE_CONFIDENCE),
+        "max_confidence": metadata.get("max_confidence", DEFAULT_MAX_CONFIDENCE),
+        "missing_required_penalty": metadata.get(
+            "missing_required_penalty",
+            DEFAULT_MISSING_REQUIRED_PENALTY,
+        ),
+        "stale_required_penalty": metadata.get(
+            "stale_required_penalty",
+            DEFAULT_STALE_REQUIRED_PENALTY,
+        ),
+        "primary_weight": metadata.get("primary_weight", 0.0),
+    }
+    for name, value in settings.items():
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be numeric")
+        if not (0.0 <= float(value) <= 1.0):
+            raise ValueError(f"{name} must be between 0.0 and 1.0")
+    if float(settings["base_confidence"]) > float(settings["max_confidence"]):
+        raise ValueError("base_confidence cannot exceed max_confidence")
+
+
 __all__ = [
     "DEFAULT_CROSS_SENSOR_HISTORY_SECONDS",
     "DEFAULT_CLUSTER_WINDOW_MS",
+    "DEFAULT_BASE_CONFIDENCE",
+    "DEFAULT_MAX_CONFIDENCE",
+    "DEFAULT_MISSING_REQUIRED_PENALTY",
+    "DEFAULT_STALE_REQUIRED_PENALTY",
     "RuleSeverity",
     "RuleMode",
     "StalenessPolicy",
     "BreachStatus",
     "ComparisonOperator",
     "ContextEffect",
+    "EvidenceRole",
     "RuleCondition",
     "Rule",
     "BreachState",

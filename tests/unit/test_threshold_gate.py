@@ -4,6 +4,7 @@ from recognition.sensor_contracts import SensorReading, SensorType
 from recognition.sensor_history import HistoryStore
 from recognition.threshold_contracts import (
     BreachStatus,
+    EvidenceRole,
     Rule,
     RuleCondition,
     RuleMode,
@@ -426,4 +427,149 @@ def test_missing_required_context_fail_closed_suppresses_breach(tmp_path):
 
     assert states == []
     assert store.get(rule.rule_id, ["temp_1"]) is None
+    history.stop()
+
+
+def _cross_fire_rule(policy=StalenessPolicy.ALERT_STALE, clear_delay_seconds=0):
+    return Rule(
+        rule_id="fire_detection",
+        name="Potential fire detection",
+        sensor_type=SensorType.TEMPERATURE,
+        enter_threshold=36.0,
+        clear_threshold=34.0,
+        severity=RuleSeverity.HIGH,
+        mode=RuleMode.ESCALATE,
+        sustained_for_seconds=0,
+        clear_delay_seconds=clear_delay_seconds,
+        staleness_policy=policy,
+        conditions=[
+            RuleCondition(
+                sensor_type=SensorType.HUMIDITY,
+                sensor_id="humidity_1",
+                operator="<",
+                threshold=40.0,
+                history_window_seconds=10,
+                required=True,
+                role=EvidenceRole.CORROBORATES,
+                weight=0.10,
+            ),
+            RuleCondition(
+                sensor_type=SensorType.SMOKE,
+                sensor_id="smoke_1",
+                operator=">",
+                threshold=0.5,
+                history_window_seconds=5,
+                required=False,
+                role=EvidenceRole.CORROBORATES,
+                weight=0.30,
+            ),
+        ],
+        metadata={
+            "base_confidence": 0.50,
+            "primary_weight": 0.20,
+            "max_confidence": 0.95,
+        },
+    )
+
+
+def test_cross_sensor_candidate_becomes_active_with_metadata(tmp_path):
+    history = _history(tmp_path)
+    history.record(_reading(38.0, "humidity_1", SensorType.HUMIDITY))
+    history.record(_reading(0.7, "smoke_1", SensorType.SMOKE))
+    rule = _cross_fire_rule()
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    states = gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)
+
+    assert states[0].status == BreachStatus.ACTIVE
+    stored = store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"])
+    assert stored.status == BreachStatus.ACTIVE
+    evaluation = stored.rule_snapshot["metadata"]["cross_sensor_evaluation"]
+    assert evaluation["policy"]["action"] == "continue"
+    assert evaluation["confidence"]["final_confidence"] == 0.95
+    assert [item["status"] for item in evaluation["evidence"]["items"]] == [
+        "matched",
+        "matched",
+        "matched",
+    ]
+    history.stop()
+
+
+def test_cross_sensor_required_stale_alert_creates_lower_severity_review_state(tmp_path):
+    history = _history(tmp_path)
+    rule = _cross_fire_rule(policy=StalenessPolicy.ALERT_STALE)
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    states = gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)
+
+    assert states[0].status == BreachStatus.ACTIVE
+    stored = store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"])
+    assert stored.rule_snapshot["severity"] == RuleSeverity.WARNING.value
+    assert stored.rule_snapshot["mode"] == RuleMode.LOG_ONLY.value
+    evaluation = stored.rule_snapshot["metadata"]["cross_sensor_evaluation"]
+    assert evaluation["policy"]["action"] == "stale_alert"
+    assert evaluation["policy"]["issues"][0]["sensor_id"] == "humidity_1"
+    history.stop()
+
+
+def test_cross_sensor_fail_closed_suppresses_missing_required_evidence(tmp_path):
+    history = _history(tmp_path)
+    rule = _cross_fire_rule(policy=StalenessPolicy.FAIL_CLOSED)
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    states = gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)
+
+    assert states == []
+    assert store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"]) is None
+    history.stop()
+
+
+def test_cross_sensor_not_matched_required_evidence_prevents_new_breach(tmp_path):
+    history = _history(tmp_path)
+    history.record(_reading(55.0, "humidity_1", SensorType.HUMIDITY))
+    rule = _cross_fire_rule()
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    states = gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)
+
+    assert states == []
+    assert store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"]) is None
+    history.stop()
+
+
+def test_active_cross_sensor_breach_does_not_retrigger_repeatedly(tmp_path):
+    history = _history(tmp_path)
+    history.record(_reading(38.0, "humidity_1", SensorType.HUMIDITY))
+    rule = _cross_fire_rule()
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    first = gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)[0]
+    second = gate.evaluate(
+        _reading(37.5, "temp_1"),
+        now=BASE_TIME + timedelta(seconds=5),
+    )[0]
+
+    assert first.status == BreachStatus.ACTIVE
+    assert second.status == BreachStatus.ACTIVE
+    assert second.first_triggered_at == BASE_TIME
+    stored = store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"])
+    assert stored.last_triggered_at == BASE_TIME + timedelta(seconds=5)
+    history.stop()
+
+
+def test_cross_sensor_breach_clears_when_primary_clears(tmp_path):
+    history = _history(tmp_path)
+    history.record(_reading(38.0, "humidity_1", SensorType.HUMIDITY))
+    rule = _cross_fire_rule(clear_delay_seconds=0)
+    gate, store = _context_gate(tmp_path, rule, history)
+
+    gate.evaluate(_reading(37.0, "temp_1"), now=BASE_TIME)
+    states = gate.evaluate(
+        _reading(33.0, "temp_1"),
+        now=BASE_TIME + timedelta(seconds=2),
+    )
+
+    assert states[0].status == BreachStatus.CLEARED
+    stored = store.get(rule.rule_id, ["humidity_1", "smoke_1", "temp_1"])
+    assert stored.cleared_at == BASE_TIME + timedelta(seconds=2)
     history.stop()

@@ -1,0 +1,26 @@
+{
+  "rule_id": "fire_multi_evidence",
+  "expected": {
+    "status": "cleared"
+  },
+  "readings": [
+    {
+      "sensor_id": "humidity_1",
+      "sensor_type": "humidity",
+      "value": 38.0
+    },
+    {
+      "sensor_id": "temp_1",
+      "sensor_type": "temperature",
+      "value": 37.0,
+      "trigger": true
+    },
+    {
+      "sensor_id": "temp_1",
+      "sensor_type": "temperature",
+      "value": 33.0,
+      "trigger": true,
+      "offset_seconds": 2
+    }
+  ]
+}

@@ -65,6 +65,11 @@ class SensorType(str, Enum):
     PRESSURE = "pressure"
     AIR_QUALITY = "air_quality"
     GAS = "gas"
+    SMOKE = "smoke"
+    RAINFALL = "rainfall"
+    WATER_LEVEL = "water_level"
+    WATER_FLOW = "water_flow"
+    SOIL_MOISTURE = "soil_moisture"
     
     # Motion / Position
     ACCELEROMETER = "accelerometer"

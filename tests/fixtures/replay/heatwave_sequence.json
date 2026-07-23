@@ -1,0 +1,27 @@
+{
+  "rule_id": "heatwave_context_multi_evidence",
+  "expected": {
+    "status": "active",
+    "policy_action": "continue",
+    "mode": "log_only",
+    "max_confidence": 0.5
+  },
+  "readings": [
+    {
+      "sensor_id": "outdoor_temp",
+      "sensor_type": "temperature",
+      "value": 39.0
+    },
+    {
+      "sensor_id": "smoke_1",
+      "sensor_type": "smoke",
+      "value": 0.0
+    },
+    {
+      "sensor_id": "indoor_temp",
+      "sensor_type": "temperature",
+      "value": 37.0,
+      "trigger": true
+    }
+  ]
+}

@@ -9,10 +9,12 @@ later phases.
 
 import copy
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from .sensor_contracts import SensorReading
 from .sensor_history import HistoryStore
+from .threshold_ai import attach_ai_advisory
+from .threshold_confidence import calculate_evidence_confidence
 from .threshold_contracts import (
     BreachState,
     BreachStatus,
@@ -24,6 +26,8 @@ from .threshold_contracts import (
     StalenessPolicy,
     _utc_now_naive,
 )
+from .threshold_evidence import EvidenceSnapshot, EvidenceStatus, build_evidence_snapshot
+from .threshold_policy import PolicyAction, apply_staleness_policy
 from .threshold_state import BreachStateStore
 
 
@@ -35,6 +39,11 @@ SEVERITY_ORDER = [
 ]
 
 
+class AdvisoryClient(Protocol):
+    def analyze_breach(self, state: BreachState):
+        ...
+
+
 class ThresholdGate:
     """Deterministic rule evaluator for single-sensor threshold breaches."""
 
@@ -43,10 +52,12 @@ class ThresholdGate:
         rules: Iterable[Rule],
         state_store: Optional[BreachStateStore] = None,
         history_store: Optional[HistoryStore] = None,
+        advisory_client: Optional[AdvisoryClient] = None,
     ):
         self.rules = list(rules)
         self.state_store = state_store or BreachStateStore()
         self.history_store = history_store
+        self.advisory_client = advisory_client
 
     def evaluate(
         self,
@@ -64,6 +75,12 @@ class ThresholdGate:
         for rule in self.rules:
             if not self._rule_applies(rule, reading):
                 continue
+            if rule.is_cross_sensor:
+                state = self._evaluate_cross_sensor_rule(rule, reading, evaluated_at)
+                if state is not None:
+                    state = self._maybe_attach_ai_advisory(state)
+                    states.append(state)
+                continue
             effective_rule, context, suppressed = self._apply_context(
                 rule,
                 evaluated_at,
@@ -76,19 +93,91 @@ class ThresholdGate:
         return states
 
     def _rule_applies(self, rule: Rule, reading: SensorReading) -> bool:
-        return (
-            rule.enabled
-            and not rule.is_cross_sensor
-            and rule.sensor_type == reading.sensor_type
+        if not rule.enabled:
+            return False
+        if not rule.is_cross_sensor:
+            return rule.sensor_type == reading.sensor_type
+        if self.history_store is None:
+            return False
+        return any(
+            condition.sensor_type == reading.sensor_type
+            and (condition.sensor_id is None or condition.sensor_id == reading.sensor_id)
+            for condition in rule.conditions
         )
+
+    def _evaluate_cross_sensor_rule(
+        self,
+        rule: Rule,
+        reading: SensorReading,
+        now: datetime,
+    ) -> Optional[BreachState]:
+        snapshot = build_evidence_snapshot(
+            reading,
+            rule,
+            history_store=self.history_store,
+            now=now,
+        )
+        policy = apply_staleness_policy(rule, snapshot)
+        confidence = calculate_evidence_confidence(rule, snapshot)
+
+        effective_rule = copy.copy(rule)
+        effective_rule.metadata = copy.deepcopy(rule.metadata)
+        effective_rule.metadata["cross_sensor_evaluation"] = {
+            "evidence": snapshot.to_dict(),
+            "policy": policy.to_dict(),
+            "confidence": confidence.to_dict(),
+        }
+
+        if policy.action == PolicyAction.SUPPRESS:
+            return None
+
+        if policy.action == PolicyAction.STALE_ALERT:
+            effective_rule.severity = _adjust_severity(rule.severity, -1)
+            effective_rule.mode = RuleMode.LOG_ONLY
+            if not _primary_matched(snapshot):
+                return None
+            return self._evaluate_rule(
+                effective_rule,
+                reading,
+                now,
+                sensor_ids=_sensor_ids_from_snapshot(snapshot),
+            )
+
+        if not _required_conditions_matched(snapshot):
+            previous = self.state_store.get(
+                rule.rule_id,
+                _sensor_ids_from_snapshot(snapshot),
+            )
+            if previous and not self._entered(reading, rule):
+                return self._evaluate_rule(
+                    effective_rule,
+                    reading,
+                    now,
+                    sensor_ids=previous.sensor_ids,
+                )
+            return None
+
+        return self._evaluate_rule(
+            effective_rule,
+            reading,
+            now,
+            sensor_ids=_sensor_ids_from_snapshot(snapshot),
+        )
+
+    def _maybe_attach_ai_advisory(self, state: BreachState) -> BreachState:
+        if self.advisory_client is None:
+            return state
+        annotated = attach_ai_advisory(state, self.advisory_client)
+        return self.state_store.upsert(annotated)
 
     def _evaluate_rule(
         self,
         rule: Rule,
         reading: SensorReading,
         now: datetime,
+        sensor_ids: Optional[List[str]] = None,
     ) -> Optional[BreachState]:
-        sensor_ids = [reading.sensor_id]
+        sensor_ids = sensor_ids or [reading.sensor_id]
         previous = self.state_store.get(rule.rule_id, sensor_ids)
 
         if previous is None:
@@ -461,3 +550,25 @@ def _matches_condition(reading: SensorReading, condition: RuleCondition) -> bool
             f"Context operator {condition.operator.value} needs history trend support"
         )
     return comparisons[condition.operator]
+
+
+def _primary_matched(snapshot: EvidenceSnapshot) -> bool:
+    return bool(snapshot.items) and snapshot.items[0].status == EvidenceStatus.MATCHED
+
+
+def _required_conditions_matched(snapshot: EvidenceSnapshot) -> bool:
+    return all(
+        item.status == EvidenceStatus.MATCHED
+        for item in snapshot.items
+        if item.required
+    )
+
+
+def _sensor_ids_from_snapshot(snapshot: EvidenceSnapshot) -> List[str]:
+    sensor_ids = {snapshot.triggering_sensor_id}
+    for item in snapshot.items:
+        if item.sensor_id:
+            sensor_ids.add(item.sensor_id)
+        if item.reading and item.reading.get("sensor_id"):
+            sensor_ids.add(item.reading["sensor_id"])
+    return sorted(sensor_ids)

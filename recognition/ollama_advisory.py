@@ -150,6 +150,8 @@ def build_threshold_advisory_payload(state: BreachState) -> Dict[str, Any]:
             "mode": snapshot.get("mode"),
         },
         "context_evaluation": metadata.get("context_evaluation", {}),
+        "cross_sensor_evaluation": metadata.get("cross_sensor_evaluation", {}),
+        "ai_advisory": metadata.get("ai_advisory", {}),
     }
 
 

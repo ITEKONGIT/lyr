@@ -1,0 +1,26 @@
+{
+  "rule_id": "fire_multi_evidence",
+  "expected": {
+    "status": "active",
+    "policy_action": "continue",
+    "min_confidence": 0.9
+  },
+  "readings": [
+    {
+      "sensor_id": "humidity_1",
+      "sensor_type": "humidity",
+      "value": 38.0
+    },
+    {
+      "sensor_id": "smoke_1",
+      "sensor_type": "smoke",
+      "value": 0.7
+    },
+    {
+      "sensor_id": "temp_1",
+      "sensor_type": "temperature",
+      "value": 37.0,
+      "trigger": true
+    }
+  ]
+}

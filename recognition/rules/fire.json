@@ -1,0 +1,51 @@
+{
+  "rules": [
+    {
+      "rule_id": "fire_multi_evidence",
+      "name": "Fire multi-evidence detection",
+      "description": "Detect likely fire risk from high temperature corroborated by low humidity and optional smoke.",
+      "sensor_type": "temperature",
+      "enter_threshold": 36.0,
+      "clear_threshold": 34.0,
+      "severity": "high",
+      "mode": "escalate",
+      "sustained_for_seconds": 0.0,
+      "clear_delay_seconds": 0.0,
+      "staleness_policy": "alert_stale",
+      "stale_age_seconds": 60,
+      "conditions": [
+        {
+          "sensor_id": "humidity_1",
+          "sensor_type": "humidity",
+          "operator": "<",
+          "threshold": 40.0,
+          "history_window_seconds": 10,
+          "required": true,
+          "role": "corroborates",
+          "weight": 0.1,
+          "reason": "Low humidity corroborates heat risk"
+        },
+        {
+          "sensor_id": "smoke_1",
+          "sensor_type": "smoke",
+          "operator": ">",
+          "threshold": 0.5,
+          "history_window_seconds": 5,
+          "required": false,
+          "role": "corroborates",
+          "weight": 0.3,
+          "reason": "Smoke is strong fire corroboration"
+        }
+      ],
+      "metadata": {
+        "phase": "2.7.6",
+        "base_confidence": 0.5,
+        "primary_weight": 0.2,
+        "max_confidence": 0.95,
+        "missing_required_penalty": 0.15,
+        "stale_required_penalty": 0.2
+      },
+      "enabled": true
+    }
+  ]
+}
