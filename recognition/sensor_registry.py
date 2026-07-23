@@ -12,7 +12,7 @@ All operations are thread-safe for concurrent sensor ingestion.
 
 import threading
 from typing import Any, Dict, Optional, List, Set
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 
 from .sensor_contracts import (
@@ -21,6 +21,10 @@ from .sensor_contracts import (
     SensorMetadata,
     SensorRegistryState,
 )
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class SensorRegistry:
@@ -53,10 +57,10 @@ class SensorRegistry:
         self._registry_lock = threading.RLock()
         
         self._total_readings = 0
-        self._last_cleanup = datetime.utcnow()
+        self._last_cleanup = _utc_now_naive()
         
         self._initialized = True
-        print(f"[SensorRegistry] Initialized at {datetime.utcnow().isoformat()}")
+        print(f"[SensorRegistry] Initialized at {_utc_now_naive().isoformat()}")
     
     # ──────────────────────────────────────────────
     # REGISTRATION
@@ -88,14 +92,28 @@ class SensorRegistry:
             if sensor_id in self._sensors:
                 # Update existing
                 metadata = self._sensors[sensor_id]
+                if metadata.sensor_type != sensor_type:
+                    self._sensors_by_type[metadata.sensor_type].discard(sensor_id)
+                    metadata.sensor_type = sensor_type
+                    self._sensors_by_type[sensor_type].add(sensor_id)
                 if location:
+                    old_room = (
+                        str(metadata.location["room"])
+                        if metadata.location and "room" in metadata.location
+                        else None
+                    )
+                    new_room = str(location["room"]) if "room" in location else None
+                    if old_room and old_room != new_room:
+                        self._sensors_by_location[old_room].discard(sensor_id)
+                    if new_room:
+                        self._sensors_by_location[new_room].add(sensor_id)
                     metadata.location = location
                 if device_info:
                     metadata.device_info = device_info
                 if config:
                     metadata.config = config
                 metadata.is_active = True
-                metadata.last_reading_at = datetime.utcnow()
+                metadata.last_reading_at = _utc_now_naive()
                 return metadata
             
             # Create new sensor
@@ -105,7 +123,7 @@ class SensorRegistry:
                 location=location,
                 device_info=device_info,
                 config=config or {},
-                registered_at=datetime.utcnow(),
+                registered_at=_utc_now_naive(),
                 is_active=True,
             )
             
@@ -205,7 +223,7 @@ class SensorRegistry:
                 active_sensors=active_count,
                 sensor_types=type_counts,
                 total_readings=self._total_readings,
-                last_update=datetime.utcnow(),
+                last_update=_utc_now_naive(),
             )
     
     def get_stats(self) -> Dict[str, Any]:
@@ -240,7 +258,7 @@ class SensorRegistry:
         Returns:
             int: Number of sensors marked inactive.
         """
-        now = datetime.utcnow()
+        now = _utc_now_naive()
         stale_count = 0
         
         with self._registry_lock:

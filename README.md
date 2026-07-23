@@ -34,7 +34,7 @@ The system serves a WebSocket-enabled live dashboard and REST API for integratio
 Design Principles
 Fail toward hard alert. When confidence is uncertain, the system defaults to human attention, not autonomous action.
 
-Confidence is explicit. Every reading carries a confidence score (0–1). Autonomous action requires ≥0.95.
+Confidence is explicit. Every reading carries a confidence score (0–1). Autonomous action starts at ≥0.99, with a hard lower floor of ≥0.95.
 
 Sensors are nodes, not special cases. Vision, temperature, motion, audio—all emit the same SensorReading contract and are treated identically.
 

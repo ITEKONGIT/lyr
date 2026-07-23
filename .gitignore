@@ -1,26 +1,20 @@
-__pycache__/ 
-*.pyc 
-.env 
-venv/ 
-*.sqlite3 
-*.db 
-recognition/test_db_*/ 
-"recognition/database/face_db/*.bin" 
-"recognition/database/face_db/*/data_level0.bin" 
-"recognition/database/face_db/*/length.bin" 
-"# Test artifacts" 
-"tests/fixtures/*" 
-"*.pyc" 
-"__pycache__/" 
-".pytest_cache/" 
-"" 
-"# Test fixtures and artifacts" 
-"tests/fixtures/" 
-"!tests/fixtures/__init__.py" 
-"" 
-"# Face recognition database binaries" 
-"recognition/database/face_db/*.bin" 
-"recognition/database/face_db/*/*.bin" 
-"" 
-"# Test database artifacts" 
-"recognition/test_db_*/" 
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.env
+venv/
+.venv/
+
+*.sqlite3
+*.db
+
+# Face recognition database binaries
+recognition/database/face_db/*.bin
+recognition/database/face_db/**/*.bin
+
+# Test database artifacts
+recognition/test_db_*/
+tests/fixtures/**
+!tests/fixtures/
+!tests/fixtures/__init__.py

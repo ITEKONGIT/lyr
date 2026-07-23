@@ -8,7 +8,7 @@ The existing contracts.py remains untouched for face recognition.
 """
 
 from typing import Any, Dict, Optional, List, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass, field
 import uuid
@@ -28,6 +28,27 @@ from .contracts import (
     ReEnrollmentResult,
     LightingVarianceError,
 )
+
+
+CRITICAL_CONFIDENCE_THRESHOLD = 0.95
+HIGH_CONFIDENCE_THRESHOLD = 0.80
+MEDIUM_CONFIDENCE_THRESHOLD = 0.60
+LOW_CONFIDENCE_THRESHOLD = 0.40
+
+MIN_AUTONOMOUS_ACTION_THRESHOLD = 0.95
+DEFAULT_AUTONOMOUS_ACTION_THRESHOLD = 0.99
+STALE_READING_MAX_AGE_SECONDS = 300
+MAX_BATCH_READINGS = 1000
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _normalize_utc_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 # ──────────────────────────────────────────────────
@@ -162,13 +183,13 @@ class ConfidenceLevel(str, Enum):
         if score is None:
             return cls.NONE
         
-        if score >= 0.95:
+        if score >= CRITICAL_CONFIDENCE_THRESHOLD:
             return cls.CRITICAL
-        elif score >= 0.80:
+        elif score >= HIGH_CONFIDENCE_THRESHOLD:
             return cls.HIGH
-        elif score >= 0.60:
+        elif score >= MEDIUM_CONFIDENCE_THRESHOLD:
             return cls.MEDIUM
-        elif score >= 0.40:
+        elif score >= LOW_CONFIDENCE_THRESHOLD:
             return cls.LOW
         else:
             return cls.NONE
@@ -195,7 +216,7 @@ class SensorReading:
     sensor_id: str = field(metadata={"description": "Unique identifier for the physical sensor"})
     sensor_type: SensorType = field(metadata={"description": "Type of sensor"})
     value: float = field(metadata={"description": "The numeric reading value"})
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utc_now_naive)
     
     # ─── Optional but Recommended ─────────────────
     
@@ -256,6 +277,8 @@ class SensorReading:
     
     def _validate(self):
         """Internal validation."""
+        self.timestamp = _normalize_utc_naive(self.timestamp)
+
         if not self.sensor_id or len(self.sensor_id) < 1:
             raise ValueError("sensor_id must be non-empty")
         
@@ -263,7 +286,7 @@ class SensorReading:
             if not (0.0 <= self.confidence_score <= 1.0):
                 raise ValueError(f"confidence_score must be between 0 and 1, got {self.confidence_score}")
         
-        if self.timestamp > datetime.utcnow():
+        if self.timestamp > _utc_now_naive():
             raise ValueError("timestamp cannot be in the future")
     
     # ──────────────────────────────────────────────
@@ -274,23 +297,35 @@ class SensorReading:
         """Return the confidence level based on the confidence_score."""
         return ConfidenceLevel.from_score(self.confidence_score)
     
-    def is_autonomous_action_safe(self, required_confidence: float = 0.95) -> bool:
+    def is_autonomous_action_safe(
+        self,
+        required_confidence: float = DEFAULT_AUTONOMOUS_ACTION_THRESHOLD,
+    ) -> bool:
         """
         Determine if this reading is confident enough for autonomous action.
         
         This is the HIGHEST LEVERAGE design decision in the entire system.
         
-        - If confidence >= required_confidence (default 0.95): Safe to act
+        - If confidence >= required_confidence (default 0.99): Safe to act
         - If confidence < required_confidence: Fail TOWARD hard alert
         """
+        if required_confidence < MIN_AUTONOMOUS_ACTION_THRESHOLD:
+            raise ValueError(
+                "required_confidence cannot be below "
+                f"{MIN_AUTONOMOUS_ACTION_THRESHOLD:.2f}"
+            )
+
         if self.confidence_score is None:
             return False
         
         return self.confidence_score >= required_confidence
     
-    def is_stale(self, max_age_seconds: int = 300) -> bool:
+    def is_stale(
+        self,
+        max_age_seconds: int = STALE_READING_MAX_AGE_SECONDS,
+    ) -> bool:
         """Check if the reading is stale (older than max_age_seconds)."""
-        age = (datetime.utcnow() - self.timestamp).total_seconds()
+        age = (_utc_now_naive() - self.timestamp).total_seconds()
         return age > max_age_seconds
     
     def is_high_confidence(self) -> bool:
@@ -359,7 +394,7 @@ class SensorReadingBatch:
     )
     
     timestamp: datetime = field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now_naive,
         metadata={"description": "UTC timestamp of the batch creation"}
     )
     
@@ -368,8 +403,12 @@ class SensorReadingBatch:
         if not self.readings:
             raise ValueError("Batch must contain at least one reading")
         
-        if len(self.readings) > 1000:
-            raise ValueError(f"Batch too large: {len(self.readings)} > 1000")
+        self.timestamp = _normalize_utc_naive(self.timestamp)
+
+        if len(self.readings) > MAX_BATCH_READINGS:
+            raise ValueError(
+                f"Batch too large: {len(self.readings)} > {MAX_BATCH_READINGS}"
+            )
     
     def __repr__(self) -> str:
         return (f"SensorReadingBatch(id={self.batch_id[:8]}, "
@@ -391,7 +430,7 @@ class SensorMetadata:
     
     sensor_id: str
     sensor_type: SensorType
-    registered_at: datetime = field(default_factory=datetime.utcnow)
+    registered_at: datetime = field(default_factory=_utc_now_naive)
     last_reading_at: Optional[datetime] = None
     reading_count: int = 0
     
@@ -490,7 +529,7 @@ def identification_to_sensor_reading(
         sensor_type=SensorType.FACE,
         value=confidence,  # The primary value is the confidence
         confidence_score=confidence,
-        timestamp=datetime.utcnow(),
+        timestamp=_utc_now_naive(),
         source="face_recognition_pipeline",
         metadata={
             'identity': result.identity,
@@ -563,6 +602,16 @@ def create_sensor_reading(
 # ──────────────────────────────────────────────────
 
 __all__ = [
+    # Decision constants
+    'CRITICAL_CONFIDENCE_THRESHOLD',
+    'HIGH_CONFIDENCE_THRESHOLD',
+    'MEDIUM_CONFIDENCE_THRESHOLD',
+    'LOW_CONFIDENCE_THRESHOLD',
+    'MIN_AUTONOMOUS_ACTION_THRESHOLD',
+    'DEFAULT_AUTONOMOUS_ACTION_THRESHOLD',
+    'STALE_READING_MAX_AGE_SECONDS',
+    'MAX_BATCH_READINGS',
+
     # Enums
     'SensorType',
     'SensorUnit',
