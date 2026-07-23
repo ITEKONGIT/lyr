@@ -87,8 +87,8 @@ async def verify_websocket_key(websocket: WebSocket) -> bool:
     if api_key is None:
         return False
     
-    # Use constant-time comparison
-    return api_key == Config.API_KEY
+    # Use constant-time comparison to prevent timing attacks
+    return hmac.compare_digest(api_key, Config.API_KEY)
 
 
 # ──────────────────────────────────────────────────

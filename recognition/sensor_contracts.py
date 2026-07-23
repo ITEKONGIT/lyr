@@ -8,7 +8,7 @@ The existing contracts.py remains untouched for face recognition.
 """
 
 from typing import Any, Dict, Optional, List, Union
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from dataclasses import dataclass, field
 import uuid
@@ -38,6 +38,7 @@ LOW_CONFIDENCE_THRESHOLD = 0.40
 MIN_AUTONOMOUS_ACTION_THRESHOLD = 0.95
 DEFAULT_AUTONOMOUS_ACTION_THRESHOLD = 0.99
 STALE_READING_MAX_AGE_SECONDS = 300
+FUTURE_TIMESTAMP_TOLERANCE_SECONDS = 5
 MAX_BATCH_READINGS = 1000
 
 
@@ -286,7 +287,11 @@ class SensorReading:
             if not (0.0 <= self.confidence_score <= 1.0):
                 raise ValueError(f"confidence_score must be between 0 and 1, got {self.confidence_score}")
         
-        if self.timestamp > _utc_now_naive():
+        max_timestamp = (
+            _utc_now_naive()
+            + timedelta(seconds=FUTURE_TIMESTAMP_TOLERANCE_SECONDS)
+        )
+        if self.timestamp > max_timestamp:
             raise ValueError("timestamp cannot be in the future")
     
     # ──────────────────────────────────────────────
@@ -610,6 +615,7 @@ __all__ = [
     'MIN_AUTONOMOUS_ACTION_THRESHOLD',
     'DEFAULT_AUTONOMOUS_ACTION_THRESHOLD',
     'STALE_READING_MAX_AGE_SECONDS',
+    'FUTURE_TIMESTAMP_TOLERANCE_SECONDS',
     'MAX_BATCH_READINGS',
 
     # Enums

@@ -4,6 +4,7 @@ import pytest
 
 from recognition.sensor_contracts import (
     ConfidenceLevel,
+    FUTURE_TIMESTAMP_TOLERANCE_SECONDS,
     SensorReading,
     SensorType,
     SensorUnit,
@@ -23,13 +24,32 @@ def test_aware_timestamp_is_normalized_without_crashing_validation():
     assert reading.timestamp.tzinfo is None
 
 
-def test_future_aware_timestamp_raises_value_error_not_type_error():
+def test_small_future_clock_skew_is_accepted():
+    reading = SensorReading(
+        sensor_id="temp_skew",
+        sensor_type=SensorType.TEMPERATURE,
+        value=22.0,
+        timestamp=(
+            datetime.now(timezone.utc)
+            + timedelta(seconds=FUTURE_TIMESTAMP_TOLERANCE_SECONDS - 1)
+        ),
+        unit=SensorUnit.CELSIUS,
+        confidence_score=0.9,
+    )
+
+    assert reading.timestamp.tzinfo is None
+
+
+def test_future_aware_timestamp_beyond_tolerance_raises_value_error():
     with pytest.raises(ValueError, match="timestamp cannot be in the future"):
         SensorReading(
             sensor_id="temp_future",
             sensor_type=SensorType.TEMPERATURE,
             value=22.0,
-            timestamp=datetime.now(timezone.utc) + timedelta(minutes=1),
+            timestamp=(
+                datetime.now(timezone.utc)
+                + timedelta(seconds=FUTURE_TIMESTAMP_TOLERANCE_SECONDS + 1)
+            ),
             unit=SensorUnit.CELSIUS,
             confidence_score=0.9,
         )

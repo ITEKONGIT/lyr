@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import pytest
@@ -136,3 +137,34 @@ def test_buffered_write_queue_fails_loud_when_full(tmp_path, monkeypatch):
         assert store.get_history("overflow") == []
     finally:
         store.stop()
+
+
+def test_concurrent_direct_writes_do_not_drop_or_duplicate_readings(tmp_path):
+    store = HistoryStore(tmp_path / "history.db", per_sensor_cap=1000)
+    worker_count = 20
+    writes_per_worker = 10
+
+    def write_batch(worker_index):
+        for idx in range(writes_per_worker):
+            sensor_id = f"sensor_{idx % 5}"
+            reading = _reading(
+                sensor_id,
+                float(worker_index * writes_per_worker + idx),
+            )
+            store._record_direct(reading)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        list(executor.map(write_batch, range(worker_count)))
+
+    expected_count = worker_count * writes_per_worker
+    readings = store.get_history_global(limit=expected_count)
+    reading_ids = [reading.reading_id for reading in readings]
+
+    assert len(readings) == expected_count
+    assert len(set(reading_ids)) == expected_count
+
+    for idx in range(5):
+        sensor_readings = store.get_history(f"sensor_{idx}", limit=1000)
+        assert len(sensor_readings) == worker_count * (writes_per_worker // 5)
+
+    store.stop()
