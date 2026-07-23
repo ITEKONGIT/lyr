@@ -75,6 +75,28 @@ def test_rejects_invalid_rule_via_contract_validation(tmp_path):
         load_rules(path)
 
 
+def test_rejects_unimplemented_trend_operator_at_rule_load(tmp_path):
+    path = _write_json(
+        tmp_path / "trend.json",
+        {
+            "rules": [
+                _rule(
+                    conditions=[
+                        {
+                            "sensor_type": "humidity",
+                            "operator": "dropping",
+                            "threshold": 5.0,
+                        }
+                    ]
+                )
+            ]
+        },
+    )
+
+    with pytest.raises(RuleLoadError, match="Trend operators are not implemented"):
+        load_rules(path)
+
+
 def test_loads_only_enabled_rules_by_default(tmp_path):
     path = _write_json(
         tmp_path / "rules.json",

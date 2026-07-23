@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Union
 
-from .threshold_contracts import Rule
+from .threshold_contracts import ComparisonOperator, Rule
 
 
 DEFAULT_RULES_DIR = Path(__file__).parent / "rules"
@@ -83,10 +83,25 @@ def _load_rule_data(path: Path) -> List[Dict[str, Any]]:
 
 def _build_rule(data: Dict[str, Any]) -> Rule:
     try:
-        return Rule.from_dict(data)
+        rule = Rule.from_dict(data)
+        _reject_unimplemented_operators(rule)
+        return rule
     except (TypeError, ValueError) as exc:
         rule_id = data.get("rule_id", "<unknown>")
         raise RuleLoadError(f"Invalid rule {rule_id}: {exc}") from exc
+
+
+def _reject_unimplemented_operators(rule: Rule) -> None:
+    unsupported = [
+        condition.operator.value
+        for condition in [*rule.conditions, *rule.context_gates]
+        if condition.operator in (ComparisonOperator.RISING, ComparisonOperator.DROPPING)
+    ]
+    if unsupported:
+        operators = ", ".join(sorted(set(unsupported)))
+        raise ValueError(
+            f"Trend operators are not implemented for rule loading yet: {operators}"
+        )
 
 
 def _validate_unique_rule_ids(rules: List[Rule]) -> None:

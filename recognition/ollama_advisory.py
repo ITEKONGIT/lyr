@@ -21,6 +21,14 @@ from .threshold_contracts import BreachState
 DEFAULT_OLLAMA_MODEL = "qwen3:4b"
 DEFAULT_OLLAMA_TIMEOUT_SECONDS = 30
 COMMON_OLLAMA_PATH = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+TRUSTED_SOURCE_VALUES = {
+    "camera_module",
+    "face_recognition_pipeline",
+    "phone_browser",
+    "sensor_api",
+    "unit_test",
+    "weather_api",
+}
 
 
 @dataclass
@@ -133,7 +141,7 @@ def find_ollama_executable() -> Optional[str]:
 def build_threshold_advisory_payload(state: BreachState) -> Dict[str, Any]:
     snapshot = state.rule_snapshot or {}
     metadata = snapshot.get("metadata", {})
-    return {
+    payload = {
         "rule_id": state.rule_id,
         "sensor_ids": state.sensor_ids,
         "status": state.status.value,
@@ -153,6 +161,7 @@ def build_threshold_advisory_payload(state: BreachState) -> Dict[str, Any]:
         "cross_sensor_evaluation": metadata.get("cross_sensor_evaluation", {}),
         "ai_advisory": metadata.get("ai_advisory", {}),
     }
+    return _sanitize_prompt_payload(payload)
 
 
 def _build_prompt(payload: Dict[str, Any]) -> str:
@@ -163,6 +172,27 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
         "Use risk_level one of low, medium, high, critical. "
         f"Payload: {json.dumps(payload, sort_keys=True)}"
     )
+
+
+def _sanitize_prompt_payload(value: Any, key: Optional[str] = None) -> Any:
+    if key == "source":
+        return _sanitize_source(value)
+    if isinstance(value, dict):
+        return {
+            item_key: _sanitize_prompt_payload(item_value, item_key)
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_prompt_payload(item) for item in value]
+    return value
+
+
+def _sanitize_source(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return "untrusted"
+    return value if value in TRUSTED_SOURCE_VALUES else "untrusted"
 
 
 def _parse_json_object(raw: str) -> Dict[str, Any]:

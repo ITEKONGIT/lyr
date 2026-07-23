@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from recognition.sensor_contracts import SensorReading, SensorType
 from recognition.sensor_history import HistoryStore
 from recognition.threshold_contracts import EvidenceRole, Rule, RuleCondition
@@ -194,4 +196,34 @@ def test_snapshot_serializes_human_explainable_metadata(tmp_path):
     assert data["items"][2]["weight"] == 0.30
     assert data["items"][2]["reading"]["source"] == "unit_test"
     assert data["items"][2]["reading"]["location"] == {"room": 4}
+    history.stop()
+
+
+def test_unimplemented_trend_operator_fails_loudly_during_evaluation(tmp_path):
+    history = _history(tmp_path)
+    history.record(_reading(38.0, "humidity_1", SensorType.HUMIDITY))
+    rule = Rule(
+        rule_id="trend_gap",
+        name="Trend gap",
+        sensor_type=SensorType.TEMPERATURE,
+        enter_threshold=36.0,
+        clear_threshold=34.0,
+        conditions=[
+            RuleCondition(
+                sensor_type=SensorType.HUMIDITY,
+                sensor_id="humidity_1",
+                operator="dropping",
+                threshold=5.0,
+                history_window_seconds=10,
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="not implemented by evidence evaluation"):
+        build_evidence_snapshot(
+            _reading(37.0, "temp_1", SensorType.TEMPERATURE),
+            rule,
+            history_store=history,
+            now=BASE_TIME,
+        )
     history.stop()

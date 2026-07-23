@@ -216,7 +216,10 @@ def _matches_condition(reading: SensorReading, condition: RuleCondition) -> bool
         ComparisonOperator.NEQ: reading.value != condition.threshold,
     }
     if condition.operator not in comparisons:
-        return False
+        raise ValueError(
+            f"Operator {condition.operator.value} is accepted by the contract "
+            "but is not implemented by evidence evaluation yet"
+        )
     return comparisons[condition.operator]
 
 
